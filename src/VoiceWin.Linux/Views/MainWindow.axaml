@@ -1,0 +1,187 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="VoiceWin.Views.MainWindow"
+        Title="VoiceWin"
+        Height="600"
+        Width="450"
+        WindowStartupLocation="CenterScreen"
+        Background="{StaticResource BackgroundBrush}"
+        CanResize="False"
+        Icon="avares://voicewin/Assets/vwtrans-crop.png">
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="24">
+            <TextBlock Text="VoiceWin"
+                       FontSize="28"
+                       FontWeight="Bold"
+                       Foreground="{StaticResource TextBrush}"
+                       Margin="0,0,0,8"/>
+
+            <TextBlock Text="Speech-to-Text Transcription"
+                       FontSize="14"
+                       Foreground="{StaticResource TextMutedBrush}"
+                       Margin="0,0,0,24"/>
+
+            <Border Background="{StaticResource SurfaceBrush}"
+                    CornerRadius="8"
+                    Padding="16"
+                    Margin="0,0,0,16">
+                <StackPanel>
+                    <Grid Margin="0,0,0,8" ColumnDefinitions="*,Auto">
+                        <TextBlock Text="Status"
+                                   FontWeight="SemiBold"
+                                   Foreground="{StaticResource TextBrush}"/>
+                        <Ellipse x:Name="StatusIndicator"
+                                 Grid.Column="1"
+                                 Width="10"
+                                 Height="10"
+                                 Fill="{StaticResource SuccessBrush}"/>
+                    </Grid>
+                    <TextBlock x:Name="StatusText"
+                               Text="Ready - Press Right Alt to record"
+                               TextWrapping="Wrap"
+                               Foreground="{StaticResource TextMutedBrush}"/>
+                </StackPanel>
+            </Border>
+
+            <TextBlock Classes="section" Text="API Keys"/>
+
+            <TextBlock Classes="label" Text="Groq API Key"/>
+            <TextBox x:Name="GroqApiKeyBox" Margin="0,0,0,12"/>
+
+            <TextBlock Classes="label" Text="Deepgram API Key"/>
+            <TextBox x:Name="DeepgramApiKeyBox" Margin="0,0,0,16"/>
+
+            <TextBlock Classes="section" Text="Transcription Provider"/>
+
+            <ComboBox x:Name="ProviderCombo" Margin="0,0,0,16">
+                <ComboBoxItem Content="Groq (whisper-large-v3-turbo)" Tag="groq"/>
+                <ComboBoxItem Content="Deepgram (nova-3)" Tag="deepgram"/>
+                <ComboBoxItem Content="Deepgram Streaming (nova-3)" Tag="deepgram-streaming"/>
+            </ComboBox>
+
+            <TextBlock Classes="section" Text="Recording Device"/>
+
+            <ComboBox x:Name="InputDeviceCombo" Margin="0,0,0,16"/>
+
+            <TextBlock Classes="section" Text="Groq Model"/>
+
+            <ComboBox x:Name="GroqModelCombo" Margin="0,0,0,16">
+                <ComboBoxItem Content="Whisper Large v3 Turbo (fast)" Tag="whisper-large-v3-turbo"/>
+                <ComboBoxItem Content="Whisper Large v3 (accurate)" Tag="whisper-large-v3"/>
+                <ComboBoxItem Content="Distil Whisper Large v3 (English)" Tag="distil-whisper-large-v3-en"/>
+            </ComboBox>
+
+            <TextBlock Classes="section" Text="Deepgram Model"/>
+
+            <ComboBox x:Name="DeepgramModelCombo" Margin="0,0,0,16">
+                <ComboBoxItem Content="Nova-3 (latest)" Tag="nova-3"/>
+                <ComboBoxItem Content="Nova-2" Tag="nova-2"/>
+                <ComboBoxItem Content="Nova" Tag="nova"/>
+                <ComboBoxItem Content="Enhanced" Tag="enhanced"/>
+                <ComboBoxItem Content="Base" Tag="base"/>
+            </ComboBox>
+
+            <TextBlock Classes="section" Text="Hotkey"/>
+
+            <Grid Margin="0,0,0,16" ColumnDefinitions="*,Auto">
+                <TextBox x:Name="HotkeyDisplayBox"
+                         IsReadOnly="True"
+                         Text="Right Alt"
+                         Margin="0,0,8,0"/>
+                <Button x:Name="RecordHotkeyButton"
+                        Grid.Column="1"
+                        Content="Record"
+                        Width="80"
+                        Click="RecordHotkey_Click"/>
+            </Grid>
+
+            <TextBlock Classes="section" Text="Hotkey Mode" Margin="0,0,0,12"/>
+
+            <ComboBox x:Name="HotkeyModeCombo" Margin="0,0,0,16">
+                <ComboBoxItem Content="Hold to Record" Tag="hold"/>
+                <ComboBoxItem Content="Tap to Toggle" Tag="toggle"/>
+                <ComboBoxItem Content="Hybrid (Hold or Tap)" Tag="hybrid"/>
+            </ComboBox>
+
+            <TextBlock Classes="section" Text="Overlay Position"/>
+
+            <ComboBox x:Name="OverlayPositionCombo" Margin="0,0,0,16">
+                <ComboBoxItem Content="Bottom of Screen" Tag="bottom"/>
+                <ComboBoxItem Content="Top of Screen" Tag="top"/>
+            </ComboBox>
+
+            <TextBlock Classes="section" Text="Language"/>
+
+            <ComboBox x:Name="LanguageCombo" Margin="0,0,0,24">
+                <ComboBoxItem Content="Multilingual (Auto-detect)" Tag="multi"/>
+                <ComboBoxItem Content="English" Tag="en"/>
+                <ComboBoxItem Content="Spanish" Tag="es"/>
+                <ComboBoxItem Content="French" Tag="fr"/>
+                <ComboBoxItem Content="German" Tag="de"/>
+                <ComboBoxItem Content="Italian" Tag="it"/>
+                <ComboBoxItem Content="Portuguese" Tag="pt"/>
+                <ComboBoxItem Content="Dutch" Tag="nl"/>
+                <ComboBoxItem Content="Russian" Tag="ru"/>
+                <ComboBoxItem Content="Japanese" Tag="ja"/>
+                <ComboBoxItem Content="Korean" Tag="ko"/>
+                <ComboBoxItem Content="Chinese" Tag="zh"/>
+                <ComboBoxItem Content="Hindi" Tag="hi"/>
+                <ComboBoxItem Content="Arabic" Tag="ar"/>
+                <ComboBoxItem Content="Turkish" Tag="tr"/>
+                <ComboBoxItem Content="Polish" Tag="pl"/>
+                <ComboBoxItem Content="Ukrainian" Tag="uk"/>
+                <ComboBoxItem Content="Vietnamese" Tag="vi"/>
+                <ComboBoxItem Content="Indonesian" Tag="id"/>
+                <ComboBoxItem Content="Thai" Tag="th"/>
+            </ComboBox>
+
+            <TextBlock Classes="section" Text="AI Enhancement"/>
+
+            <CheckBox x:Name="AiEnhancementCheckBox"
+                      Content="Enable AI Enhancement"
+                      Margin="0,0,0,12"/>
+
+            <TextBlock Classes="label" Text="Enhancement Model"/>
+            <ComboBox x:Name="AiEnhancementModelCombo" Margin="0,0,0,12">
+                <ComboBoxItem Content="Kimi K2 Instruct (0905)" Tag="moonshotai/kimi-k2-instruct-0905"/>
+                <ComboBoxItem Content="Llama 3.3 70B Versatile" Tag="llama-3.3-70b-versatile"/>
+                <ComboBoxItem Content="Llama 3.1 8B Instant" Tag="llama-3.1-8b-instant"/>
+                <ComboBoxItem Content="GPT-OSS 120B" Tag="openai/gpt-oss-120b"/>
+                <ComboBoxItem Content="GPT-OSS 20B" Tag="openai/gpt-oss-20b"/>
+                <ComboBoxItem Content="Qwen3.6 27B" Tag="qwen/qwen3.6-27b"/>
+            </ComboBox>
+
+            <TextBlock Classes="label" Text="Enhancement Prompt"/>
+            <TextBox x:Name="AiEnhancementPromptBox"
+                     AcceptsReturn="True"
+                     TextWrapping="Wrap"
+                     Height="120"
+                     Margin="0,0,0,24"/>
+
+            <TextBlock Classes="section" Text="Streaming"/>
+
+            <TextBlock Classes="label" Text="Auto-stop after silence (seconds)"/>
+            <TextBox x:Name="VadSilenceTimeoutBox" Margin="0,0,0,24"/>
+
+            <TextBlock Classes="section" Text="General"/>
+
+            <CheckBox x:Name="ShowOverlayCheckBox"
+                      Content="Show recording overlay"
+                      Margin="0,0,0,12"/>
+
+            <CheckBox x:Name="StartWithSystemCheckBox"
+                      Content="Start with system"
+                      Margin="0,0,0,12"/>
+
+            <CheckBox x:Name="StartMinimizedCheckBox"
+                      Content="Start minimized to tray"
+                      Margin="0,0,0,24"/>
+
+            <Button Content="Save Settings"
+                    Click="SaveSettings_Click"
+                    HorizontalAlignment="Stretch"
+                    Margin="0,0,0,12"/>
+        </StackPanel>
+    </ScrollViewer>
+</Window>

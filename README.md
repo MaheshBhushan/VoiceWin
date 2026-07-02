@@ -38,6 +38,31 @@
 ## Requirements
 
 - Windows 10/11 x64
+- Or Linux (Arch/CachyOS and others) — see [Linux](#linux)
+
+## Linux
+
+A native Linux port lives in `src/VoiceWin.Linux` — a full Avalonia GUI port with feature parity: the same settings window, animated recording overlay (waveform bars + REC/LIVE indicator), tray icon with status dot, hold/toggle/hybrid hotkey modes, custom hotkey recording, Deepgram streaming with silence auto-stop, AI enhancement, and sound feedback. It shares the transcription/LLM services and settings format with the Windows app (`~/.config/VoiceWin/settings.json`).
+
+**Build** (requires `dotnet-sdk` 8+):
+
+```bash
+dotnet publish src/VoiceWin.Linux -c Release -r linux-x64 --self-contained \
+  -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true \
+  -p:IncludeNativeLibrariesForSelfExtract=true -o publish/linux-x64
+```
+
+This produces a single self-contained `publish/linux-x64/voicewin` executable — no .NET runtime needed.
+
+**Runtime dependencies** (Arch/CachyOS package names): `pipewire-pulse` (mic capture via `parecord`), `wl-clipboard` (clipboard), and for auto-paste either `ydotool` (with `ydotoold` running) or `wtype`. Optional: `mpv` or `ffmpeg` (`ffplay`) for sound feedback.
+
+**Global hotkey:** the hotkey listener reads `/dev/input` (works on both X11 and Wayland) and requires membership in the `input` group:
+
+```bash
+sudo usermod -aG input $USER   # then log out and back in
+```
+
+Without it, recording can still be toggled by clicking the tray icon or by binding a desktop-environment global shortcut to `voicewin --toggle`.
 
 ## Quick Start
 
