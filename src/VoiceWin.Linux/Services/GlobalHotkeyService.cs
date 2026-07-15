@@ -42,7 +42,10 @@ public class GlobalHotkeyService : IDisposable
                 var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
                 _devices.Add(fs);
                 var token = _cts.Token;
-                _ = Task.Run(() => ReadLoop(fs, token), token);
+                // Dedicated thread per device: these reads block indefinitely,
+                // so running them via Task.Run would pin every thread-pool
+                // worker and starve all async work in the app.
+                new Thread(() => ReadLoop(fs, token)) { IsBackground = true, Name = $"evdev:{Path.GetFileName(path)}" }.Start();
             }
             catch (UnauthorizedAccessException) { }
             catch (IOException) { }
