@@ -266,12 +266,27 @@ public class TranscriptionOrchestrator : IDisposable
         if (!_audioService.IsRecording || _isProcessing) return;
 
         _isProcessing = true;
-        
+
         Task.Run(async () =>
         {
-            StatusChanged?.Invoke(this, "Processing...");
-            var audioData = _audioService.StopRecording();
-            await ProcessTranscriptionAsync(audioData);
+            // Any escape here would be swallowed as an unobserved task
+            // exception and leave _isProcessing stuck true, rejecting every
+            // future hotkey press as "Busy" until restart.
+            try
+            {
+                StatusChanged?.Invoke(this, "Processing...");
+                var audioData = _audioService.StopRecording();
+                await ProcessTranscriptionAsync(audioData);
+            }
+            catch (Exception ex)
+            {
+                Log($"stop/transcribe pipeline failed: {ex}");
+                StatusChanged?.Invoke(this, $"Error: {ex.Message}");
+            }
+            finally
+            {
+                _isProcessing = false;
+            }
         });
     }
 

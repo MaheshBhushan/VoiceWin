@@ -108,13 +108,28 @@ public class AudioRecordingService : IDisposable
         _readTask = Task.Run(() =>
         {
             var chunk = new byte[3200]; // 100 ms at 16 kHz mono s16le
-            int read;
-            while ((read = stdout.Read(chunk, 0, chunk.Length)) > 0)
+            try
             {
-                lock (buffer) buffer.Write(chunk, 0, read);
-                var copy = new byte[read];
-                Array.Copy(chunk, copy, read);
-                AudioChunkAvailable?.Invoke(this, new AudioChunkEventArgs(copy, read));
+                int read;
+                while ((read = stdout.Read(chunk, 0, chunk.Length)) > 0)
+                {
+                    lock (buffer) buffer.Write(chunk, 0, read);
+                    var copy = new byte[read];
+                    Array.Copy(chunk, copy, read);
+                    try
+                    {
+                        AudioChunkAvailable?.Invoke(this, new AudioChunkEventArgs(copy, read));
+                    }
+                    catch (Exception ex)
+                    {
+                        // A misbehaving handler must not kill audio capture.
+                        TranscriptionOrchestrator.Log($"audio chunk handler failed: {ex}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                TranscriptionOrchestrator.Log($"parecord read loop died: {ex}");
             }
         });
 
@@ -141,13 +156,23 @@ public class AudioRecordingService : IDisposable
         }
         catch { }
 
-        _readTask?.Wait(2000);
+        try
+        {
+            _readTask?.Wait(2000);
+        }
+        catch (AggregateException ex)
+        {
+            // Wait() rethrows a fault from the read loop; the audio captured
+            // before the fault is still in the buffer, so keep going.
+            TranscriptionOrchestrator.Log($"read task faulted: {ex.InnerException}");
+        }
         process.WaitForExit(2000);
         process.Dispose();
 
         byte[] pcm;
         lock (buffer!) pcm = buffer.ToArray();
         buffer.Dispose();
+        TranscriptionOrchestrator.Log($"stop: captured {pcm.Length} bytes ({pcm.Length / 32000.0:F1}s)");
 
         RecordingStopped?.Invoke(this, EventArgs.Empty);
         return WrapWav(pcm);

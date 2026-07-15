@@ -27,6 +27,11 @@ public class DeepgramTranscriptionService
 
             var listenClient = ClientFactory.CreateListenRESTClient();
 
+            // Without an explicit CancellationTokenSource the SDK applies a
+            // 30 s default timeout, which long recordings (big WAV upload +
+            // processing) can exceed.
+            using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+
             var response = await listenClient.TranscribeFile(
                 audioData,
                 new PreRecordedSchema
@@ -35,7 +40,8 @@ public class DeepgramTranscriptionService
                     Language = language,
                     Punctuate = true,
                     SmartFormat = true
-                });
+                },
+                timeout);
 
             var transcript = response?.Results?.Channels?
                 .FirstOrDefault()?
