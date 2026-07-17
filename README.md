@@ -1,3 +1,5 @@
+![C#](https://img.shields.io/badge/C%23-512BD4?style=flat&logo=dotnet&logoColor=white)
+
 <p align="center">
   <img src="src/VoiceWin/Assets/vwtrans-crop.png" alt="VoiceWin" width="128" height="128">
 </p>
