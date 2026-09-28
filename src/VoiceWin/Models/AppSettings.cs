@@ -4,11 +4,12 @@ public class AppSettings
 {
     public string? GroqApiKey { get; set; }
     public string? DeepgramApiKey { get; set; }
-    public string TranscriptionProvider { get; set; } = "groq";
+    public string TranscriptionProvider { get; set; } = "deepgram-streaming";
     public string GroqModel { get; set; } = "whisper-large-v3-turbo";
     public int InputDeviceNumber { get; set; } = -1; // -1 = system default
-    public string DeepgramModel { get; set; } = "nova-3";
-    public string HotkeyMode { get; set; } = "hold";
+    public string DeepgramModel { get; set; } = "flux-general-en";
+    public string LinuxPasteShortcut { get; set; } = "ctrl-shift-v";
+    public string HotkeyMode { get; set; } = "toggle";
     public int HotkeyVirtualKey { get; set; } = 165;
     public int HotkeyModifiers { get; set; } = 0; // 0=None, 1=Ctrl, 2=Alt, 4=Shift, 8=Win (combinable)
     public string Language { get; set; } = "multi";

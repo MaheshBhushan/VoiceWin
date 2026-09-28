@@ -105,6 +105,7 @@ public partial class MainWindow : Window
 
     private void SubscribeToEvents()
     {
+        _app.Orchestrator.TranscriptPreviewChanged += (s, text) => _statusOverlay.UpdateTranscript(text);
         _app.Orchestrator.RecordingStarted += (s, e) =>
         {
             Dispatcher.BeginInvoke(() =>
@@ -160,6 +161,7 @@ public partial class MainWindow : Window
             {
                 if (result.Success)
                 {
+                    _statusOverlay.UpdateTranscript(result.Text ?? "");
                     StatusText.Text = $"Done ({result.Duration.TotalMilliseconds:F0}ms)";
                 }
             });
@@ -196,6 +198,13 @@ public partial class MainWindow : Window
         if (!int.TryParse(VadSilenceTimeoutBox.Text, out int timeout) || timeout < 0)
         {
             StatusText.Text = "Invalid silence timeout (must be a non-negative number)";
+            return;
+        }
+
+        if (GetSelectedTag(ProviderCombo) == "deepgram" &&
+            GetSelectedTag(DeepgramModelCombo).StartsWith("flux-", StringComparison.Ordinal))
+        {
+            StatusText.Text = "Flux requires Deepgram Streaming. Select Streaming or choose Nova-3 for batch.";
             return;
         }
 

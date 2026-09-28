@@ -54,7 +54,19 @@ dotnet publish src/VoiceWin.Linux -c Release -r linux-x64 --self-contained \
 
 This produces a single self-contained `publish/linux-x64/voicewin` executable — no .NET runtime needed.
 
-**Runtime dependencies** (Arch/CachyOS package names): `pipewire-pulse` (mic capture via `parecord`), `wl-clipboard` (clipboard), and for auto-paste either `ydotool` (with `ydotoold` running) or `wtype`. Optional: `mpv` or `ffmpeg` (`ffplay`) for sound feedback.
+**Add to your application launcher** (installs the binary to `~/.local/bin`, the icon, and a `.desktop` entry — no root needed):
+
+```bash
+./install-linux.sh
+```
+
+VoiceWin then appears in your desktop's app launcher / menu under *Utilities*.
+
+**Runtime dependencies** (Arch/CachyOS package names): `pipewire-pulse` (mic capture via `parecord`), `wl-clipboard` (clipboard), and for auto-paste `ydotool` (preferred) or `wtype`. Optional: `mpv` or `ffmpeg` (`ffplay`) for sound feedback.
+
+**Auto-paste:** Linux defaults to **Ctrl+Shift+V** for terminal inputs, with **Ctrl+V** (desktop inputs) and **Shift+Insert** selectable under **Paste shortcut**. Shift+Insert updates both the regular clipboard and PRIMARY selection, because different applications read different selections. VoiceWin verifies the transcript with `wl-paste` before injecting a paste shortcut and cancels automatic paste if verification fails. Choose the shortcut your target app accepts. Clipboard writes and keystrokes run in order so streaming chunks cannot overwrite one another before paste. VoiceWin prefers `ydotool` via `/dev/uinput` and can start its own daemon when permissions allow it; `wtype` is a fallback for compatible compositors (not KWin). Failures appear in status and stderr; when copying succeeds, the latest chunk remains available for manual paste.
+
+**Live dictation:** choose **Deepgram Streaming**, configure a Deepgram key, and use **Tap to Toggle** so the recording modifier is released while text is pasted. Focus the target input, tap the hotkey, speak, then tap again to stop. Finalized phrases append during recording, including final results on stop. Interim guesses are not inserted because they can change. Linux streaming skips AI enhancement to avoid delaying or reordering phrases; batch transcription still supports enhancement.
 
 **Global hotkey:** the hotkey listener reads `/dev/input` (works on both X11 and Wayland) and requires membership in the `input` group:
 
@@ -215,3 +227,17 @@ Output: `publish/VoiceWin.exe` (~560MB due to bundled ONNX Runtime for VAD)
 ## License
 
 MIT
+
+### Linux regression checks
+
+Run `dotnet run --project tests/VoiceWin.Regression` with .NET 8 installed (or set `DOTNET_ROLL_FORWARD=Major` to use a newer runtime). The dependency-free harness uses fake clipboard/keyboard tools and a local WebSocket server; it does not type into applications or contact Deepgram. It covers ordered Unicode paste, shortcut selection, error reporting, copied/ordered audio buffers, fragmented responses, and final transcripts on stop.
+
+### Deepgram model choices
+
+The list is intentionally small: **Flux General English** (default), **Flux General Multilingual**, and **Nova-3 General** (batch or live fallback). New installations default to Deepgram Streaming and Tap to Toggle. Flux requires a Deepgram API key and the streaming provider; choose Nova-3 for batch transcription.
+
+Flux uses `/v2/listen` and appends confirmed turns during recording. On stop, VoiceWin preserves the last pending update, since Flux CloseStream does not emit EndOfTurn. Multilingual mode leaves language detection to Flux; a specific language is sent as a language hint. Language availability is model-dependent. See [Flux API](https://developers.deepgram.com/reference/speech-to-text/listen-flux) and [closing a Flux stream](https://developers.deepgram.com/docs/flux/close-stream).
+
+### Live transcript overlay
+
+During streaming, a transcript panel below the REC/LIVE recording badge displays the session so far, including interim recognition updates. Revised words replace the current phrase; confirmed phrases accumulate. The panel wraps and scrolls to the newest text, stays within the screen work area, clears for the next recording, and remains visible for 1.5 seconds after transcription finishes. Preview updates do not paste interim guesses or take keyboard focus from your target application.

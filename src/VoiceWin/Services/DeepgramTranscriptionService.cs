@@ -11,6 +11,8 @@ public class DeepgramTranscriptionService
 
     public async Task<TranscriptionResult> TranscribeAsync(byte[] audioData, string apiKey, string model = "nova-3", string language = "en")
     {
+        if (model.StartsWith("flux-", StringComparison.Ordinal))
+            return new TranscriptionResult { Success = false, Error = "Flux requires Deepgram Streaming; choose Nova-3 for batch.", Provider = "deepgram" };
         var startTime = DateTime.UtcNow;
 
         try

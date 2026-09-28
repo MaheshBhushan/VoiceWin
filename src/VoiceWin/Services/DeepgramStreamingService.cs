@@ -1,3 +1,4 @@
+using System.IO;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
@@ -11,8 +12,27 @@ public class DeepgramStreamingService : IDisposable
     private Task? _receiveTask;
     private readonly object _lock = new();
     private bool _isConnected;
+    private Task _sendTask = Task.CompletedTask;
+    private bool _closing;
+    private bool _isFlux;
+    private int _fluxTurn = -1;
+    private int _lastCommittedTurn = -1;
+    private string _fluxTranscript = "";
+    private readonly StringBuilder _confirmedTranscript = new();
+
+    internal static Uri BuildUri(string model, string language)
+    {
+        if (model.StartsWith("flux-", StringComparison.Ordinal))
+        {
+            string hint = model == "flux-general-multi" && language != "multi"
+                ? "&language_hint=" + Uri.EscapeDataString(language) : "";
+            return new Uri($"wss://api.deepgram.com/v2/listen?model={Uri.EscapeDataString(model)}&encoding=linear16&sample_rate=16000&eot_timeout_ms=1000{hint}");
+        }
+        return new Uri($"wss://api.deepgram.com/v1/listen?model={Uri.EscapeDataString(model)}&language={Uri.EscapeDataString(language)}&encoding=linear16&sample_rate=16000&channels=1&punctuate=true&smart_format=true&endpointing=300&interim_results=true&vad_events=true&utterance_end_ms=1000");
+    }
 
     public event EventHandler<string>? TranscriptReceived;
+    public event EventHandler<string>? TranscriptPreviewChanged;
     public event EventHandler<string>? ErrorOccurred;
     public event EventHandler? ConnectionClosed;
     public event EventHandler? SpeechStarted;
@@ -20,16 +40,28 @@ public class DeepgramStreamingService : IDisposable
 
     public bool IsConnected => _isConnected;
 
-    public async Task<bool> ConnectAsync(string apiKey, string model = "nova-3", string language = "en")
+    public async Task<bool> ConnectAsync(string apiKey, string model = "flux-general-en", string language = "multi")
     {
         try
         {
+            await CloseAsync();
+            _cts?.Dispose();
+            _webSocket?.Dispose();
+            _closing = false;
+            _sendTask = Task.CompletedTask;
+            _receiveTask = null;
             _cts = new CancellationTokenSource();
             _webSocket = new ClientWebSocket();
             _webSocket.Options.SetRequestHeader("Authorization", $"Token {apiKey}");
             _webSocket.Options.KeepAliveInterval = TimeSpan.FromSeconds(5);
 
-            var uri = new Uri($"wss://api.deepgram.com/v1/listen?model={model}&language={language}&encoding=linear16&sample_rate=16000&channels=1&punctuate=true&smart_format=true&interim_results=true&vad_events=true&utterance_end_ms=1000");
+            _isFlux = model.StartsWith("flux-", StringComparison.Ordinal);
+            _fluxTurn = -1;
+            _lastCommittedTurn = -1;
+            _fluxTranscript = "";
+            _confirmedTranscript.Clear();
+            PublishPreview("");
+            var uri = BuildUri(model, language);
 
             using var connectCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token, connectCts.Token);
@@ -60,63 +92,74 @@ public class DeepgramStreamingService : IDisposable
 
     public void SendAudio(byte[] audioData, int length)
     {
-        if (_webSocket?.State != WebSocketState.Open)
-            return;
+        lock (_lock)
+        {
+            if (!_isConnected || _closing || _webSocket == null || _cts == null) return;
+            // Capture owns and reuses its buffer; each queued send needs its own copy.
+            byte[] copy = audioData.AsSpan(0, length).ToArray();
+            _sendTask = SendAfterAsync(_sendTask, _webSocket, copy, _cts.Token);
+        }
+    }
 
+    private async Task SendAfterAsync(Task previous, ClientWebSocket socket, byte[] data, CancellationToken token)
+    {
+        await previous;
+        if (token.IsCancellationRequested || socket.State != WebSocketState.Open) return;
         try
         {
-            var segment = new ArraySegment<byte>(audioData, 0, length);
-            _webSocket.SendAsync(segment, WebSocketMessageType.Binary, true, CancellationToken.None)
-                .ConfigureAwait(false);
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
+            timeout.CancelAfter(TimeSpan.FromSeconds(5));
+            await socket.SendAsync(new ArraySegment<byte>(data), WebSocketMessageType.Binary, true, timeout.Token);
         }
         catch (Exception ex)
         {
-            ErrorOccurred?.Invoke(this, $"Send failed: {ex.Message}");
+            _isConnected = false;
+            if (!token.IsCancellationRequested)
+                ErrorOccurred?.Invoke(this, $"Send failed: {ex.Message}");
         }
     }
 
     public async Task<bool> CloseAsync()
     {
-        if (_webSocket?.State != WebSocketState.Open)
-            return true;
-
+        Task pending;
+        lock (_lock)
+        {
+            _closing = true;
+            pending = _sendTask;
+        }
+        if (_webSocket == null) return true;
         try
         {
-            var closeMessage = Encoding.UTF8.GetBytes("{\"type\":\"CloseStream\"}");
-            await _webSocket.SendAsync(
-                new ArraySegment<byte>(closeMessage),
-                WebSocketMessageType.Text,
-                true,
-                CancellationToken.None);
-
-            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
-            try
-            {
-                if (_receiveTask != null)
-                    await _receiveTask.WaitAsync(timeoutCts.Token);
-            }
-            catch (TimeoutException) { }
-            catch (OperationCanceledException) { }
-
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+            await pending.WaitAsync(timeout.Token);
             if (_webSocket.State == WebSocketState.Open)
             {
-                await _webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Done", CancellationToken.None);
+                await _webSocket.SendAsync(new ArraySegment<byte>(Encoding.UTF8.GetBytes("{\"type\":\"CloseStream\"}")),
+                    WebSocketMessageType.Text, true, timeout.Token);
+                if (_receiveTask != null) await _receiveTask.WaitAsync(timeout.Token);
             }
-
-            _isConnected = false;
+            if (_webSocket.State == WebSocketState.CloseReceived)
+                await _webSocket.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "Done", timeout.Token);
             return true;
         }
         catch (Exception ex)
         {
             ErrorOccurred?.Invoke(this, $"Close failed: {ex.Message}");
-            _isConnected = false;
             return false;
+        }
+        finally
+        {
+            _isConnected = false;
+            _cts?.Cancel();
+            _webSocket.Abort();
+            if (_receiveTask != null) await _receiveTask;
         }
     }
 
     private async Task ReceiveLoop()
     {
         var buffer = new byte[8192];
+        using var message = new MemoryStream();
 
         try
         {
@@ -131,13 +174,23 @@ public class DeepgramStreamingService : IDisposable
 
                 if (result.MessageType == WebSocketMessageType.Text)
                 {
-                    var json = Encoding.UTF8.GetString(buffer, 0, result.Count);
+                    message.Write(buffer, 0, result.Count);
+                    if (message.Length > 1024 * 1024)
+                        throw new InvalidDataException("Streaming response exceeded 1 MB.");
+                    if (!result.EndOfMessage) continue;
+                    var json = Encoding.UTF8.GetString(message.ToArray());
+                    message.SetLength(0);
                     ProcessMessage(json);
                 }
             }
         }
         catch (OperationCanceledException) { }
-        catch (WebSocketException) { }
+        catch (WebSocketException ex)
+        {
+            // Flux CloseStream may end the transport without a WebSocket close frame.
+            if (!(_isFlux && _closing && ex.WebSocketErrorCode == WebSocketError.ConnectionClosedPrematurely))
+                ErrorOccurred?.Invoke(this, $"Stream disconnected: {ex.Message}");
+        }
         catch (Exception ex)
         {
             ErrorOccurred?.Invoke(this, $"Receive error: {ex.Message}");
@@ -145,6 +198,7 @@ public class DeepgramStreamingService : IDisposable
         finally
         {
             _isConnected = false;
+            if (_isFlux && _closing) CommitFluxTurn();
             ConnectionClosed?.Invoke(this, EventArgs.Empty);
         }
     }
@@ -163,9 +217,15 @@ public class DeepgramStreamingService : IDisposable
 
             switch (type)
             {
+                case "TurnInfo":
+                    ProcessFluxTurn(root);
+                    break;
+                case "Error":
+                    ErrorOccurred?.Invoke(this, root.TryGetProperty("description", out var description)
+                        ? description.GetString() ?? "Deepgram stream error" : "Deepgram stream error");
+                    break;
                 case "Results":
                     bool isFinal = root.TryGetProperty("is_final", out var finalElement) && finalElement.GetBoolean();
-                    if (!isFinal) return;
 
                     if (root.TryGetProperty("channel", out var channel) &&
                         channel.TryGetProperty("alternatives", out var alternatives) &&
@@ -174,10 +234,10 @@ public class DeepgramStreamingService : IDisposable
                         alternatives[0].TryGetProperty("transcript", out var transcriptElement))
                     {
                         var transcript = transcriptElement.GetString();
-                        if (!string.IsNullOrWhiteSpace(transcript))
-                        {
-                            TranscriptReceived?.Invoke(this, transcript);
-                        }
+                        if (isFinal && !string.IsNullOrWhiteSpace(transcript))
+                            CommitTranscript(transcript);
+                        else
+                            PublishPreview(isFinal ? "" : transcript ?? "");
                     }
                     break;
                 case "SpeechStarted":
@@ -192,6 +252,63 @@ public class DeepgramStreamingService : IDisposable
         {
             ErrorOccurred?.Invoke(this, $"Parse error: {ex.Message}");
         }
+    }
+
+    private void ProcessFluxTurn(JsonElement root)
+    {
+        if (!root.TryGetProperty("turn_index", out var index) ||
+            !root.TryGetProperty("event", out var eventElement)) return;
+        int turn = index.GetInt32();
+        if (turn <= _lastCommittedTurn || turn < _fluxTurn) return;
+        if (turn != _fluxTurn)
+        {
+            _fluxTurn = turn;
+            _fluxTranscript = "";
+        }
+        if (root.TryGetProperty("transcript", out var transcript))
+            _fluxTranscript = transcript.GetString() ?? "";
+        string? eventName = eventElement.GetString();
+        if (eventName is "StartOfTurn" or "TurnResumed" ||
+            (eventName == "Update" && !string.IsNullOrWhiteSpace(_fluxTranscript)))
+            SpeechStarted?.Invoke(this, EventArgs.Empty);
+        // EagerEndOfTurn can be revised: only commit confirmed turns.
+        if (eventName == "EndOfTurn")
+        {
+            CommitFluxTurn();
+            UtteranceEnded?.Invoke(this, EventArgs.Empty);
+        }
+        else
+        {
+            PublishPreview(_fluxTranscript);
+        }
+    }
+
+    private void CommitFluxTurn()
+    {
+        if (_fluxTurn <= _lastCommittedTurn) return;
+        _lastCommittedTurn = _fluxTurn;
+        string transcript = _fluxTranscript;
+        _fluxTranscript = "";
+        if (!string.IsNullOrWhiteSpace(transcript))
+            CommitTranscript(transcript);
+        else
+            PublishPreview("");
+    }
+
+    private void CommitTranscript(string transcript)
+    {
+        if (_confirmedTranscript.Length > 0) _confirmedTranscript.Append(' ');
+        _confirmedTranscript.Append(transcript.Trim());
+        PublishPreview("");
+        TranscriptReceived?.Invoke(this, transcript);
+    }
+
+    private void PublishPreview(string interim)
+    {
+        string confirmed = _confirmedTranscript.ToString();
+        string current = interim.Trim();
+        TranscriptPreviewChanged?.Invoke(this,
+            confirmed.Length == 0 ? current : current.Length == 0 ? confirmed : confirmed + " " + current);
     }
 
     public void Dispose()

@@ -9,6 +9,7 @@ namespace VoiceWin.Views;
 public partial class StatusOverlayWindow : Window
 {
     private readonly DispatcherTimer _animationTimer;
+    private readonly DispatcherTimer _hideTimer;
     private readonly Random _random = new();
     private readonly double[] _barHeights = new double[5];
     private readonly double[] _targetHeights = new double[5];
@@ -29,6 +30,9 @@ public partial class StatusOverlayWindow : Window
     public StatusOverlayWindow()
     {
         InitializeComponent();
+        _hideTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1.5) };
+        _hideTimer.Tick += (s, e) => { _hideTimer.Stop(); Hide(); };
+        SizeChanged += (s, e) => PositionWindow();
 
         _animationTimer = new DispatcherTimer
         {
@@ -64,9 +68,10 @@ public partial class StatusOverlayWindow : Window
         if (screen == null) return;
 
         var workArea = screen.WorkingArea;
+        TranscriptPanel.Width = Math.Max(160, Math.Min(440, workArea.Width / screen.Scaling - 40));
         var scale = screen.Scaling;
         var widthPx = (Bounds.Width > 0 ? Bounds.Width : 200) * scale;
-        var heightPx = Height * scale;
+        var heightPx = Bounds.Height * scale;
 
         var left = workArea.X + (int)((workArea.Width - widthPx) / 2);
         var top = _position == "top"
@@ -81,6 +86,17 @@ public partial class StatusOverlayWindow : Window
         Dispatcher.UIThread.Post(() => StatusText.Text = status);
     }
 
+    public void UpdateTranscript(string text)
+    {
+        Dispatcher.UIThread.Post(() =>
+        {
+            TranscriptText.Text = text;
+            if (_hideTimer.IsEnabled) { _hideTimer.Stop(); _hideTimer.Start(); }
+            TranscriptPanel.IsVisible = !string.IsNullOrWhiteSpace(text);
+            Dispatcher.UIThread.Post(() => TranscriptScroll.ScrollToEnd(), DispatcherPriority.Background);
+        });
+    }
+
     public void UpdateAudioLevel(float level)
     {
         _audioLevel = Math.Clamp(level, 0, 1);
@@ -92,6 +108,9 @@ public partial class StatusOverlayWindow : Window
         _animationTimer.Start();
         Dispatcher.UIThread.Post(() =>
         {
+            _hideTimer.Stop();
+            TranscriptText.Text = "";
+            TranscriptPanel.IsVisible = false;
             Show();
             // Re-assert Topmost after mapping: KWin/X11 ignores the value set
             // before the window is first shown, leaving the overlay behind
@@ -110,8 +129,13 @@ public partial class StatusOverlayWindow : Window
 
     public void HideOverlay()
     {
-        _animationTimer.Stop();
-        Dispatcher.UIThread.Post(Hide);
+        Dispatcher.UIThread.Post(() =>
+        {
+            _animationTimer.Stop();
+            _hideTimer.Stop();
+            if (string.IsNullOrWhiteSpace(TranscriptText.Text)) Hide();
+            else _hideTimer.Start();
+        });
     }
 
     private void AnimationTimer_Tick(object? sender, EventArgs e)

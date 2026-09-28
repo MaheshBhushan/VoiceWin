@@ -27,7 +27,12 @@ public class SettingsService
         try
         {
             var json = File.ReadAllText(_settingsPath);
-            return JsonSerializer.Deserialize<Models.AppSettings>(json) ?? new Models.AppSettings();
+            var settings = JsonSerializer.Deserialize<Models.AppSettings>(json) ?? new Models.AppSettings();
+            if (settings.DeepgramModel is not ("flux-general-multi" or "flux-general-en" or "nova-3"))
+                settings.DeepgramModel = settings.TranscriptionProvider == "deepgram" ? "nova-3" : "flux-general-en";
+            if (settings.TranscriptionProvider == "deepgram" && settings.DeepgramModel.StartsWith("flux-", StringComparison.Ordinal))
+                settings.TranscriptionProvider = "deepgram-streaming";
+            return settings;
         }
         catch
         {

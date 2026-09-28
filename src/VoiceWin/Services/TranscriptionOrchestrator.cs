@@ -24,6 +24,7 @@ public class TranscriptionOrchestrator : IDisposable
     public event EventHandler? RecordingStopped;
     public event EventHandler<TranscriptionResult>? TranscriptionCompleted;
     public event EventHandler<string>? StatusChanged;
+    public event EventHandler<string>? TranscriptPreviewChanged;
     public event EventHandler<float>? AudioLevelChanged;
     public event EventHandler<bool>? SpeechDetected;
 
@@ -63,6 +64,7 @@ public class TranscriptionOrchestrator : IDisposable
         _audioService.AudioChunkAvailable += OnAudioChunkAvailable;
 
         _streamingService.TranscriptReceived += OnStreamingTranscriptReceived;
+        _streamingService.TranscriptPreviewChanged += (s, text) => TranscriptPreviewChanged?.Invoke(this, text);
         _streamingService.ErrorOccurred += (s, err) => StatusChanged?.Invoke(this, err);
         _streamingService.SpeechStarted += (s, e) => _lastSpeechTime = DateTime.UtcNow;
         _streamingService.UtteranceEnded += (s, e) => _lastSpeechTime = DateTime.UtcNow;

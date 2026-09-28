@@ -14,6 +14,7 @@ public class TranscriptionOrchestrator : IDisposable
     private readonly SettingsService _settingsService;
     private readonly SoundService _soundService;
 
+    private bool _pasteFailed;
     private bool _isProcessing;
     private bool _isStreaming;
     private bool _isAutoStopping;
@@ -29,6 +30,7 @@ public class TranscriptionOrchestrator : IDisposable
     public event EventHandler? RecordingStopped;
     public event EventHandler<TranscriptionResult>? TranscriptionCompleted;
     public event EventHandler<string>? StatusChanged;
+    public event EventHandler<string>? TranscriptPreviewChanged;
     public event EventHandler<float>? AudioLevelChanged;
     public event EventHandler<bool>? SpeechDetected;
 
@@ -47,10 +49,16 @@ public class TranscriptionOrchestrator : IDisposable
         _deepgramService = new DeepgramTranscriptionService();
         _streamingService = new DeepgramStreamingService();
         _llmService = new GroqLlmService();
-        _pasteService = new TextPasteService();
+        _pasteService = new TextPasteService { Shortcut = settingsService.Settings.LinuxPasteShortcut };
+        _pasteService.ErrorOccurred += (s, error) =>
+        {
+            _pasteFailed = true;
+            StatusChanged?.Invoke(this, error);
+        };
         _hotkeyService = new GlobalHotkeyService();
         _soundService = new SoundService();
 
+        _pasteService.Shortcut = _settingsService.Settings.LinuxPasteShortcut;
         _hotkeyService.TargetVirtualKey = _settingsService.Settings.HotkeyVirtualKey;
         _hotkeyService.TargetModifiers = _settingsService.Settings.HotkeyModifiers;
         _hotkeyService.Mode = _settingsService.Settings.HotkeyMode;
@@ -73,6 +81,7 @@ public class TranscriptionOrchestrator : IDisposable
         _audioService.AudioChunkAvailable += OnAudioChunkAvailable;
 
         _streamingService.TranscriptReceived += OnStreamingTranscriptReceived;
+        _streamingService.TranscriptPreviewChanged += (s, text) => TranscriptPreviewChanged?.Invoke(this, text);
         _streamingService.ErrorOccurred += (s, err) => StatusChanged?.Invoke(this, err);
         _streamingService.SpeechStarted += (s, e) => _lastSpeechTime = DateTime.UtcNow;
         _streamingService.UtteranceEnded += (s, e) => _lastSpeechTime = DateTime.UtcNow;
@@ -82,7 +91,7 @@ public class TranscriptionOrchestrator : IDisposable
     {
         Log($"hotkey pressed (processing={_isProcessing}, streaming={_isStreaming})");
 
-        if (_isProcessing || _isStreaming)
+        if (_isProcessing || _isStreaming || _isConnecting)
         {
             StatusChanged?.Invoke(this, "Busy, please wait...");
             _hotkeyService.CancelToggle();
@@ -98,6 +107,7 @@ public class TranscriptionOrchestrator : IDisposable
             return;
         }
 
+        _pasteFailed = false;
         _audioService.DeviceNumber = settings.InputDeviceNumber;
 
         if (settings.TranscriptionProvider == "deepgram-streaming" && !string.IsNullOrEmpty(settings.DeepgramApiKey))
@@ -116,42 +126,48 @@ public class TranscriptionOrchestrator : IDisposable
         var settings = _settingsService.Settings;
 
         _isConnecting = true;
-        _releasedDuringConnect = false;
-        StatusChanged?.Invoke(this, "Connecting...");
-
-        string? connectionError = null;
-        _streamingService.ErrorOccurred += (s, err) => connectionError = err;
-
-        var connected = await _streamingService.ConnectAsync(
-            settings.DeepgramApiKey!,
-            settings.DeepgramModel,
-            settings.Language);
-
-        _isConnecting = false;
-
-        if (!connected)
+        try
         {
-            StatusChanged?.Invoke(this, connectionError ?? "Failed to connect to Deepgram");
-            _hotkeyService.CancelToggle();
-            return;
+            _releasedDuringConnect = false;
+            StatusChanged?.Invoke(this, "Connecting...");
+
+            var connected = await _streamingService.ConnectAsync(
+                settings.DeepgramApiKey ?? "",
+                settings.DeepgramModel,
+                settings.Language);
+
+            if (!connected)
+            {
+                StatusChanged?.Invoke(this, "Failed to connect to Deepgram");
+                _hotkeyService.CancelToggle();
+                return;
+            }
+
+            // Hotkey was released while we were still connecting — abort instead
+            // of starting a recording nothing will ever stop.
+            if (_releasedDuringConnect)
+            {
+                Log("connect finished after release -> aborting session");
+                await _streamingService.CloseAsync();
+                _hotkeyService.CancelToggle();
+                StatusChanged?.Invoke(this, "Auto-stopped (released during connect)");
+                return;
+            }
+
+            _isStreaming = true;
+            _streamingStartTime = DateTime.UtcNow;
+            _lastSpeechTime = DateTime.UtcNow;
+            StatusChanged?.Invoke(this, "Recording (streaming)...");
+            _audioService.StartRecording();
         }
-
-        // Hotkey was released while we were still connecting — abort instead
-        // of starting a recording nothing will ever stop.
-        if (_releasedDuringConnect)
+        catch (Exception ex)
         {
-            Log("connect finished after release -> aborting session");
+            _isStreaming = false;
             await _streamingService.CloseAsync();
             _hotkeyService.CancelToggle();
-            StatusChanged?.Invoke(this, "Auto-stopped (released during connect)");
-            return;
+            StatusChanged?.Invoke(this, $"Error: {ex.Message}");
         }
-
-        _isStreaming = true;
-        _streamingStartTime = DateTime.UtcNow;
-        _lastSpeechTime = DateTime.UtcNow;
-        StatusChanged?.Invoke(this, "Recording (streaming)...");
-        _audioService.StartRecording();
+        finally { _isConnecting = false; }
     }
 
     private void OnAudioChunkAvailable(object? sender, AudioChunkEventArgs e)
@@ -189,19 +205,38 @@ public class TranscriptionOrchestrator : IDisposable
         {
             if (!_isStreaming) return;
             _isStreaming = false;
+            _isProcessing = true;
 
             StatusChanged?.Invoke(this, "Auto-stopped (silence timeout)");
 
             _audioService.StopRecording();
             await _streamingService.CloseAsync();
+            await _pasteService.FlushAsync();
 
             _hotkeyService.CancelToggle();
         }
-        catch { }
+        catch (Exception ex) { StatusChanged?.Invoke(this, $"Error: {ex.Message}"); }
         finally
         {
             _isAutoStopping = false;
+            _isProcessing = false;
         }
+    }
+
+    // Idle mic self-noise sits around 60 on a 16-bit scale; real speech peaks
+    // in the thousands. 300 separates the two with plenty of headroom.
+    private const short SilenceThreshold = 300;
+
+    /// <summary>Peak 16-bit sample in a WAV buffer (44-byte header skipped).</summary>
+    private static int PeakAmplitude(byte[] wav)
+    {
+        int peak = 0;
+        for (int i = 44; i < wav.Length - 1; i += 2)
+        {
+            int sample = (short)(wav[i] | (wav[i + 1] << 8));
+            peak = Math.Max(peak, Math.Abs(sample));
+        }
+        return peak;
     }
 
     private static float CalculateAudioLevel(byte[] buffer, int bytesRecorded)
@@ -221,29 +256,11 @@ public class TranscriptionOrchestrator : IDisposable
         return Math.Min(average / 2000f, 1f);
     }
 
-    private async void OnStreamingTranscriptReceived(object? sender, string transcript)
+    private void OnStreamingTranscriptReceived(object? sender, string transcript)
     {
-        var settings = _settingsService.Settings;
-        var finalText = transcript;
-
-        if (settings.AiEnhancementEnabled && !string.IsNullOrEmpty(settings.GroqApiKey))
-        {
-            var enhanceResult = await _llmService.EnhanceTextAsync(
-                transcript,
-                settings.GroqApiKey,
-                settings.AiEnhancementPrompt,
-                settings.AiEnhancementModel);
-
-            if (enhanceResult.Success && !string.IsNullOrEmpty(enhanceResult.Text))
-            {
-                finalText = enhanceResult.Text;
-            }
-        }
-
-        if (!finalText.EndsWith(' '))
-            finalText += " ";
-
-        _pasteService.PasteText(finalText);
+        // Enhancement requests can finish out of order and delay live dictation.
+        _lastSpeechTime = DateTime.UtcNow;
+        _pasteService.PasteText(transcript.Trim() + " ");
     }
 
     private void OnHotkeyReleased(object? sender, EventArgs e)
@@ -294,14 +311,22 @@ public class TranscriptionOrchestrator : IDisposable
     {
         if (!_isStreaming) return;
         _isStreaming = false;
+        _isProcessing = true;
 
-        StatusChanged?.Invoke(this, "Finalizing...");
-        _audioService.StopRecording();
+        try
+        {
+            StatusChanged?.Invoke(this, "Finalizing...");
+            _audioService.StopRecording();
 
-        await _streamingService.CloseAsync();
+            bool closed = await _streamingService.CloseAsync();
 
-        var duration = DateTime.UtcNow - _streamingStartTime;
-        StatusChanged?.Invoke(this, $"Streamed in {duration.TotalMilliseconds:F0}ms");
+            var duration = DateTime.UtcNow - _streamingStartTime;
+            await _pasteService.FlushAsync();
+            if (closed && !_pasteFailed)
+                StatusChanged?.Invoke(this, $"Streamed in {duration.TotalMilliseconds:F0}ms");
+        }
+        catch (Exception ex) { StatusChanged?.Invoke(this, $"Error: {ex.Message}"); }
+        finally { _isProcessing = false; }
     }
 
     private async Task ProcessTranscriptionAsync(byte[] audioData)
@@ -311,6 +336,17 @@ public class TranscriptionOrchestrator : IDisposable
             if (audioData.Length < 1000)
             {
                 StatusChanged?.Invoke(this, "Recording too short");
+                return;
+            }
+
+            // A silent capture (wrong/unplugged input device selected) makes
+            // Deepgram return an empty transcript, which used to surface as a
+            // bogus "Transcription failed". Name the real problem instead.
+            var peak = PeakAmplitude(audioData);
+            Log($"transcribe: {audioData.Length} bytes, peak amplitude {peak}");
+            if (peak < SilenceThreshold)
+            {
+                StatusChanged?.Invoke(this, "No audio captured - check your microphone input device");
                 return;
             }
 
@@ -365,12 +401,13 @@ public class TranscriptionOrchestrator : IDisposable
                     }
                 }
 
-                _pasteService.PasteText(finalText);
                 StatusChanged?.Invoke(this, $"Transcribed in {totalDuration.TotalMilliseconds:F0}ms");
+                await _pasteService.PasteTextAsync(finalText);
             }
             else
             {
-                StatusChanged?.Invoke(this, result.Error ?? "Transcription failed");
+                StatusChanged?.Invoke(this, result.Error
+                    ?? (result.Success ? "No speech detected" : "Transcription failed"));
             }
         }
         catch (Exception ex)
@@ -385,6 +422,7 @@ public class TranscriptionOrchestrator : IDisposable
 
     public void UpdateHotkeySettings()
     {
+        _pasteService.Shortcut = _settingsService.Settings.LinuxPasteShortcut;
         _hotkeyService.TargetVirtualKey = _settingsService.Settings.HotkeyVirtualKey;
         _hotkeyService.TargetModifiers = _settingsService.Settings.HotkeyModifiers;
         _hotkeyService.Mode = _settingsService.Settings.HotkeyMode;
@@ -399,5 +437,6 @@ public class TranscriptionOrchestrator : IDisposable
         _audioService.Dispose();
         _streamingService.Dispose();
         _soundService.Dispose();
+        _pasteService.Dispose();
     }
 }

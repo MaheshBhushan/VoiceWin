@@ -56,10 +56,17 @@
 
             <ComboBox x:Name="ProviderCombo" Margin="0,0,0,16">
                 <ComboBoxItem Content="Groq (whisper-large-v3-turbo)" Tag="groq"/>
-                <ComboBoxItem Content="Deepgram (nova-3)" Tag="deepgram"/>
-                <ComboBoxItem Content="Deepgram Streaming (nova-3)" Tag="deepgram-streaming"/>
+                <ComboBoxItem Content="Deepgram (batch)" Tag="deepgram"/>
+                <ComboBoxItem Content="Deepgram Streaming (live)" Tag="deepgram-streaming"/>
             </ComboBox>
 
+            <TextBlock Classes="section" Text="Paste shortcut"/>
+            <ComboBox x:Name="PasteShortcutCombo" Margin="0,0,0,16">
+                <ComboBoxItem Content="Ctrl+Shift+V (terminal apps, default)" Tag="ctrl-shift-v"/>
+                <ComboBoxItem Content="Shift+Insert (clipboard and primary selection)" Tag="shift-insert"/>
+                <ComboBoxItem Content="Ctrl+V (desktop apps)" Tag="ctrl-v"/>
+            </ComboBox>
+            <TextBlock Text="For live dictation, choose Deepgram Streaming and Tap to Toggle. Finalized phrases are pasted as you speak. AI enhancement is skipped in streaming mode." TextWrapping="Wrap" Margin="0,0,0,16"/>
             <TextBlock Classes="section" Text="Recording Device"/>
 
             <ComboBox x:Name="InputDeviceCombo" Margin="0,0,0,16"/>
@@ -75,11 +82,9 @@
             <TextBlock Classes="section" Text="Deepgram Model"/>
 
             <ComboBox x:Name="DeepgramModelCombo" Margin="0,0,0,16">
-                <ComboBoxItem Content="Nova-3 (latest)" Tag="nova-3"/>
-                <ComboBoxItem Content="Nova-2" Tag="nova-2"/>
-                <ComboBoxItem Content="Nova" Tag="nova"/>
-                <ComboBoxItem Content="Enhanced" Tag="enhanced"/>
-                <ComboBoxItem Content="Base" Tag="base"/>
+                <ComboBoxItem Content="Flux General Multilingual (live)" Tag="flux-general-multi"/>
+                <ComboBoxItem Content="Flux General English (default, live)" Tag="flux-general-en"/>
+                <ComboBoxItem Content="Nova-3 General (batch or live)" Tag="nova-3"/>
             </ComboBox>
 
             <TextBlock Classes="section" Text="Hotkey"/>

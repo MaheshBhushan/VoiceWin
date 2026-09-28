@@ -7,6 +7,7 @@ namespace VoiceWin.Views;
 public partial class StatusOverlayWindow : Window
 {
     private readonly DispatcherTimer _animationTimer;
+    private readonly DispatcherTimer _hideTimer;
     private readonly Random _random = new();
     private readonly double[] _barHeights = new double[5];
     private readonly double[] _targetHeights = new double[5];
@@ -28,6 +29,9 @@ public partial class StatusOverlayWindow : Window
     public StatusOverlayWindow()
     {
         InitializeComponent();
+        _hideTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1.5) };
+        _hideTimer.Tick += (s, e) => { _hideTimer.Stop(); Hide(); };
+        SizeChanged += (s, e) => PositionWindow();
 
         _animationTimer = new DispatcherTimer
         {
@@ -61,6 +65,7 @@ public partial class StatusOverlayWindow : Window
     private void PositionWindow()
     {
         var workArea = SystemParameters.WorkArea;
+        TranscriptPanel.Width = Math.Max(160, Math.Min(440, workArea.Width - 40));
         Left = (workArea.Width - ActualWidth) / 2 + workArea.Left;
         
         if (_position == "top")
@@ -74,6 +79,17 @@ public partial class StatusOverlayWindow : Window
         Dispatcher.BeginInvoke(() => StatusText.Text = status);
     }
 
+    public void UpdateTranscript(string text)
+    {
+        Dispatcher.BeginInvoke(() =>
+        {
+            TranscriptText.Text = text;
+            if (_hideTimer.IsEnabled) { _hideTimer.Stop(); _hideTimer.Start(); }
+            TranscriptPanel.Visibility = string.IsNullOrWhiteSpace(text) ? Visibility.Collapsed : Visibility.Visible;
+            Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() => TranscriptScroll.ScrollToEnd()));
+        });
+    }
+
     public void UpdateAudioLevel(float level)
     {
         _audioLevel = Math.Clamp(level, 0, 1);
@@ -85,6 +101,9 @@ public partial class StatusOverlayWindow : Window
         _animationTimer.Start();
         Dispatcher.BeginInvoke(() =>
         {
+            _hideTimer.Stop();
+            TranscriptText.Text = "";
+            TranscriptPanel.Visibility = Visibility.Collapsed;
             Show();
             PositionWindow();
         });
@@ -97,8 +116,13 @@ public partial class StatusOverlayWindow : Window
 
     public void HideOverlay()
     {
-        _animationTimer.Stop();
-        Dispatcher.BeginInvoke(() => Hide());
+        Dispatcher.BeginInvoke(() =>
+        {
+            _animationTimer.Stop();
+            _hideTimer.Stop();
+            if (string.IsNullOrWhiteSpace(TranscriptText.Text)) Hide();
+            else _hideTimer.Start();
+        });
     }
 
     private void AnimationTimer_Tick(object? sender, EventArgs e)

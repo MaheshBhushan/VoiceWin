@@ -37,6 +37,7 @@ public partial class MainWindow : Window
         DeepgramApiKeyBox.Text = settings.DeepgramApiKey ?? "";
 
         SelectComboItemByTag(ProviderCombo, settings.TranscriptionProvider);
+        SelectComboItemByTag(PasteShortcutCombo, settings.LinuxPasteShortcut);
         PopulateInputDevices(settings.InputDeviceNumber);
         SelectComboItemByTag(GroqModelCombo, settings.GroqModel);
         SelectComboItemByTag(DeepgramModelCombo, settings.DeepgramModel);
@@ -105,6 +106,7 @@ public partial class MainWindow : Window
 
     private void SubscribeToEvents()
     {
+        _app.Orchestrator.TranscriptPreviewChanged += (s, text) => _statusOverlay.UpdateTranscript(text);
         _app.Orchestrator.RecordingStarted += (s, e) =>
         {
             Dispatcher.UIThread.Post(() =>
@@ -155,6 +157,7 @@ public partial class MainWindow : Window
             {
                 if (result.Success)
                 {
+                    _statusOverlay.UpdateTranscript(result.Text ?? "");
                     StatusText.Text = $"Done ({result.Duration.TotalMilliseconds:F0}ms)";
                 }
             });
@@ -194,11 +197,19 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (GetSelectedTag(ProviderCombo) == "deepgram" &&
+            GetSelectedTag(DeepgramModelCombo).StartsWith("flux-", StringComparison.Ordinal))
+        {
+            StatusText.Text = "Flux requires Deepgram Streaming. Select Streaming or choose Nova-3 for batch.";
+            return;
+        }
+
         _app.SettingsService.UpdateSettings(settings =>
         {
             settings.GroqApiKey = GroqApiKeyBox.Text?.Trim() ?? "";
             settings.DeepgramApiKey = DeepgramApiKeyBox.Text?.Trim() ?? "";
             settings.TranscriptionProvider = GetSelectedTag(ProviderCombo);
+            settings.LinuxPasteShortcut = GetSelectedTag(PasteShortcutCombo);
             if (int.TryParse(GetSelectedTag(InputDeviceCombo), out int deviceNumber))
             {
                 settings.InputDeviceNumber = deviceNumber;
