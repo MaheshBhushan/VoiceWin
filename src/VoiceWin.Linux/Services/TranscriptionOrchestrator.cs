@@ -20,6 +20,10 @@ public class TranscriptionOrchestrator : IDisposable
     private bool _isAutoStopping;
     private bool _isConnecting;
     private bool _releasedDuringConnect;
+    // Audio captured while the Deepgram socket is still opening; null once
+    // the socket is live. Guards _isConnecting/_isStreaming hand-off too.
+    private readonly object _connectLock = new();
+    private List<byte[]>? _preConnectAudio;
     private DateTime _streamingStartTime;
     private DateTime _lastSpeechTime;
 
@@ -82,7 +86,11 @@ public class TranscriptionOrchestrator : IDisposable
 
         _streamingService.TranscriptReceived += OnStreamingTranscriptReceived;
         _streamingService.TranscriptPreviewChanged += (s, text) => TranscriptPreviewChanged?.Invoke(this, text);
-        _streamingService.ErrorOccurred += (s, err) => StatusChanged?.Invoke(this, err);
+        _streamingService.ErrorOccurred += (s, err) =>
+        {
+            Log($"streaming error: {err}");
+            StatusChanged?.Invoke(this, err);
+        };
         _streamingService.SpeechStarted += (s, e) => _lastSpeechTime = DateTime.UtcNow;
         _streamingService.UtteranceEnded += (s, e) => _lastSpeechTime = DateTime.UtcNow;
     }
@@ -125,49 +133,76 @@ public class TranscriptionOrchestrator : IDisposable
     {
         var settings = _settingsService.Settings;
 
-        _isConnecting = true;
+        lock (_connectLock)
+        {
+            _isConnecting = true;
+            _releasedDuringConnect = false;
+            _preConnectAudio = new List<byte[]>();
+        }
         try
         {
-            _releasedDuringConnect = false;
-            StatusChanged?.Invoke(this, "Connecting...");
+            // Start the mic now and buffer while the socket opens, so speech
+            // right after the press is kept instead of waiting on the handshake.
+            _streamingStartTime = DateTime.UtcNow;
+            _lastSpeechTime = DateTime.UtcNow;
+            StatusChanged?.Invoke(this, "Recording (connecting)...");
+            _audioService.StartRecording();
+            var connectStart = DateTime.UtcNow;
 
             var connected = await _streamingService.ConnectAsync(
                 settings.DeepgramApiKey ?? "",
                 settings.DeepgramModel,
                 settings.Language);
 
+            bool releasedDuringConnect;
+            int buffered = 0;
+            lock (_connectLock)
+            {
+                if (connected)
+                {
+                    foreach (var chunk in _preConnectAudio!)
+                    {
+                        _streamingService.SendAudio(chunk, chunk.Length);
+                        buffered += chunk.Length;
+                    }
+                    _isStreaming = true;
+                }
+                _preConnectAudio = null;
+                _isConnecting = false;
+                releasedDuringConnect = _releasedDuringConnect;
+            }
+
             if (!connected)
             {
+                _audioService.StopRecording();
                 StatusChanged?.Invoke(this, "Failed to connect to Deepgram");
                 _hotkeyService.CancelToggle();
                 return;
             }
 
-            // Hotkey was released while we were still connecting — abort instead
-            // of starting a recording nothing will ever stop.
-            if (_releasedDuringConnect)
-            {
-                Log("connect finished after release -> aborting session");
-                await _streamingService.CloseAsync();
-                _hotkeyService.CancelToggle();
-                StatusChanged?.Invoke(this, "Auto-stopped (released during connect)");
-                return;
-            }
-
-            _isStreaming = true;
-            _streamingStartTime = DateTime.UtcNow;
-            _lastSpeechTime = DateTime.UtcNow;
+            Log($"connected in {(DateTime.UtcNow - connectStart).TotalMilliseconds:F0}ms, flushed {buffered / 32.0:F0}ms of buffered audio");
             StatusChanged?.Invoke(this, "Recording (streaming)...");
-            _audioService.StartRecording();
+
+            // Released before the socket opened: transcribe what was buffered.
+            if (releasedDuringConnect)
+            {
+                Log("released during connect -> finishing buffered session");
+                StopStreamingRecording();
+            }
         }
         catch (Exception ex)
         {
-            _isStreaming = false;
+            lock (_connectLock)
+            {
+                _preConnectAudio = null;
+                _isConnecting = false;
+                _isStreaming = false;
+            }
+            _audioService.StopRecording();
             await _streamingService.CloseAsync();
             _hotkeyService.CancelToggle();
             StatusChanged?.Invoke(this, $"Error: {ex.Message}");
         }
-        finally { _isConnecting = false; }
     }
 
     private void OnAudioChunkAvailable(object? sender, AudioChunkEventArgs e)
@@ -177,6 +212,15 @@ public class TranscriptionOrchestrator : IDisposable
 
         bool isSpeaking = level > 0.05f;
 
+        lock (_connectLock)
+        {
+            // The capture service hands each chunk over as a fresh array.
+            if (_preConnectAudio != null)
+            {
+                _preConnectAudio.Add(e.Buffer);
+                return;
+            }
+        }
         if (_isStreaming && _streamingService.IsConnected)
         {
             _streamingService.SendAudio(e.Buffer, e.BytesRecorded);
@@ -249,7 +293,7 @@ public class TranscriptionOrchestrator : IDisposable
         for (int i = 0; i < bytesRecorded - 1; i += 2)
         {
             short sample = (short)(buffer[i] | (buffer[i + 1] << 8));
-            sum += Math.Abs(sample);
+            sum += Math.Abs((int)sample); // Math.Abs(short.MinValue) throws
         }
 
         float average = sum / (float)sampleCount;
@@ -267,10 +311,13 @@ public class TranscriptionOrchestrator : IDisposable
     {
         Log($"hotkey released (streaming={_isStreaming}, connecting={_isConnecting}, recording={_audioService.IsRecording})");
 
-        if (_isConnecting)
+        lock (_connectLock)
         {
-            _releasedDuringConnect = true;
-            return;
+            if (_isConnecting)
+            {
+                _releasedDuringConnect = true;
+                return;
+            }
         }
 
         if (_isStreaming)

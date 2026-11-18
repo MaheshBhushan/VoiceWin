@@ -92,7 +92,9 @@ public class AudioRecordingService : IDisposable
             catch { }
         }
 
-        var args = $"--raw --format=s16le --rate={SampleRate} --channels={Channels}"
+        // Without --latency-msec parecord uses a ~2 s fragment, so the first
+        // audio arrives 2 s after the hotkey press. 20 ms delivers it in ~45 ms.
+        var args = $"--raw --format=s16le --rate={SampleRate} --channels={Channels} --latency-msec=20"
                    + (device != null ? $" --device={device}" : "");
 
         _pcmBuffer = new MemoryStream();
